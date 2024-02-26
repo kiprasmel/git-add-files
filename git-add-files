@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+
+# git-add-files
+# license: GPL-2.0-only
+# (c) 2024 Kipras Melnikovas
+
+set -euo pipefail
+
+CONFIG_DISABLE_INFO="addfiles.noInfoComment"
+CONFIG_ABBREV_COMMANDS="addfiles.abbreviateCommands"
+
+FILENAME="ADD_FILES"
+
+CMD_ADD="add"
+CMD_STAGED="staged"
+CMD_HALFSTAGED="halfstaged"
+
+SHORT_CMD_ADD="a"
+SHORT_CMD_STAGED="s"
+SHORT_CMD_HALFSTAGED="h"
+
+INFO_MSG="\
+# delete \"$CMD_ADD\"    lines to prevent  files from getting staged.
+# delete \"$CMD_STAGED\" lines to un-stage files.
+#
+# delete \"$CMD_HALFSTAGED\" (noop) lines to un-stage partially-staged files.
+# change \"$CMD_HALFSTAGED\" (noop) to \"$CMD_ADD\" to stage partially-staged files.
+#
+# all commands have a single-char shortcut.
+# empty lines and lines starting with '#' will be ignored.
+# to abort, exit with non-0 code (e.g. :cq in vim).
+# vim: ft=gitaddfiles
+"
+
+USAGE="\
+usage:
+$ git-add-files
+$ git-add-files -h
+"
+git_add_files__parse_argv() {
+	test $# -gt 0 || return 0
+
+	case "$1" in
+		-h|--help)
+			printf "%s" "$USAGE"
+			exit 0
+			;;
+		*)
+			printf "%s\nunknown arg '%s'\n" "$USAGE" "$1"
+			exit 1
+			;;
+	esac
+}
+
+git_add_files() {
+	msg() {
+		FMT="$1"
+		shift
+		# shellcheck disable=2059
+		>&2 printf "$FMT" "$@"
+	}
+	die() {
+		msg "$1"
+		exit "${2:-1}"
+	}
+	BUG() {
+		msg="$1"
+		shift
+		die "BUG: $msg" "$@"
+	}
+
+	git_add_files__parse_argv "$@"
+
+	EDITOR="${EDITOR:-vi}"
+
+	repodir="$(git rev-parse --show-toplevel)"
+	gitdir="$(git rev-parse --git-dir)"
+	file="$gitdir/$FILENAME"
+
+	COMMENT_REGEX="\s*#.*$"
+
+	# TODO: save to files, instead of holding in variables
+	# TODO: keep files in .git/addfiles/
+
+	# TODO: lowercase variable names unless global
+
+	# TODO: halfstaged
+	#git status --porcelain=v1
+
+	ADD="$(   git diff --stat          | head -n -1 | sed "s@^ @@g; s@|@ #@g; s@$COMMENT_REGEX@@g")"
+	STAGED="$(git diff --stat --staged | head -n -1 | sed "s@^ @@g; s@|@ #@g; s@$COMMENT_REGEX@@g")"
+
+	inject_prefix_into() {
+		test $# -eq 2 || BUG "inject_prefix_into requires 2 args\n"
+		printf "%s" "$1" | sed "s@^@$2@g"
+	}
+
+	if test "$(git config "$CONFIG_ABBREV_COMMANDS")" = "true"; then
+		ADD_READY="$(   inject_prefix_into "$ADD"    "$SHORT_CMD_ADD ")"
+		STAGED_READY="$(inject_prefix_into "$STAGED" "$SHORT_CMD_STAGED ")"
+	else
+		ADD_READY="$(   inject_prefix_into "$ADD"    "$CMD_ADD ")"
+		STAGED_READY="$(inject_prefix_into "$STAGED" "$CMD_STAGED ")"
+	fi
+
+	sep=""
+	test -n "$ADD_READY" && test -n "$STAGED_READY" && sep="\n\n"
+	printf "%s%b%s\n%s" "$ADD_READY" "$sep" "$STAGED_READY" > "$file"
+
+	test "$(git config "$CONFIG_DISABLE_INFO")" != "true" && {
+		printf "\n%s" "$INFO_MSG" >> "$file"
+	}
+
+	msg "hint: Waiting for your editor to close the file... "
+	$EDITOR "$file" || {
+		msg "error: There was a problem with the editor '%s'.\n" "$EDITOR"
+		die "" $?
+	}
+	msg "\n"
+
+	file1="/tmp/${FILENAME}.1"
+	file1uniq="${file1}u"
+	# remove comments and empty lines
+	sed "/^\s*$/d; /^#/d; s@$COMMENT_REGEX@@g" "$file" | sort > "$file1"
+	uniq "$file1" > "$file1uniq"
+
+	diff --minimal "$file1" "$file1uniq" | { grep '^<' ||: ; } || {
+		die "fatal: duplicate filepaths found\n"
+	}
+
+	line_head() {
+		printf "%s" "$1" | cut -d' ' -f1
+	}
+	line_tail() {
+		printf "%s" "$1" | cut -d' ' -f2
+	}
+	validate_file() {
+		# TODO handle deletions
+		test -f "$1" || msg "file does not exit '$1'"
+	}
+
+	marked_added="/tmp/marked_added"
+	marked_staged="/tmp/marked_staged"
+	test -f "$marked_added"  && mv -f "$marked_added"  "$marked_added.prev"
+	test -f "$marked_staged" && mv -f "$marked_staged" "$marked_staged.prev"
+	touch "$marked_added"
+	touch "$marked_staged"
+	had_adds=0
+
+	# process & validate lines, group filepaths.
+	# no side-effects on git repo yet.
+	while read -r line; do
+		case "$line" in
+			"$CMD_ADD"|"$SHORT_CMD_ADD"*)
+				rest="$(line_tail "$line")"
+				file="$(line_head "$rest")"
+				filepath="$(realpath "$repodir/$file")"
+
+				validate_file "$filepath"
+
+				printf "%s\n" "$filepath" >> "$marked_added"
+				had_adds=1
+				;;
+			"$CMD_STAGED"|"$SHORT_CMD_STAGED"*)
+				rest="$(line_tail "$line")"
+				file="$(line_head "$rest")"
+				filepath="$(realpath "$repodir/$file")"
+
+				validate_file "$filepath"
+
+				printf "%s\n" "$filepath" >> "$marked_staged"
+				;;
+			"$CMD_HALFSTAGED"|"$SHORT_CMD_HALFSTAGED"*)
+				# noop
+				;;
+			*)
+				die "fatal: unknown command in line '$line'\n"
+				;;
+		esac
+	done < "$file1"
+
+	# add all lines that were kept as "add"
+
+	test "$had_adds" -eq 0 || git add --pathspec-from-file="$marked_added"
+
+	# unstage if any "staged" lines were removed
+
+	staged_fullpaths="$(inject_prefix_into "$STAGED" "$repodir/")"
+	were_staged="/tmp/were_staged"
+	printf "%s\n" "$staged_fullpaths" > "$were_staged"
+	
+	delta_staged="/tmp/delta_staged"
+	diff --minimal "$were_staged" "$marked_staged" > "$delta_staged" || {
+		grep "^>" "$delta_staged" && {
+			die "fatal: you marked non-staged files as staged?\n"
+		}
+
+		unmarked_staged="/tmp/unmarked_staged"
+		grep "^<" "$delta_staged" | sed 's@^< @@g' > "$unmarked_staged"
+
+		git reset --pathspec-from-file="$unmarked_staged" HEAD
+	}
+}
+
+git_add_files "$@"
+

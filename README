@@ -1,0 +1,68 @@
+git-add-files
+=============
+
+stage files fast by editing an auto-generated file, exactly like git rebase --interactive
+
+
+usage
+-----
+
+```
+$ git status
+
+Changes to be committed:
+        modified:   .config/nvim/init.vim
+        modified:   .config/tmux/tmux.conf
+
+Changes not staged for commit:
+        modified:   .gitconfig
+        modified:   .zshrc
+        modified:   README.md
+
+
+$ git add-files
+
+# => your editor:
+
+add .gitconfig
+add .zshrc
+add README.md
+
+staged .config/nvim/init.vim
+staged .config/tmux/tmux.conf
+
+# delete "add"    lines to prevent files from getting staged.
+# delete "staged" lines to un-stage files.
+# change "add"    to "edit" to selectively    stage parts of file
+# change "staged" to "edit" to selectively un-stage parts of file
+# empty lines and lines starting with '#' will be ignored.
+
+
+# => delete "README.md" line, save, exit
+
+$ git status
+
+Changes to be committed:
+        modified:   .config/nvim/init.vim
+        modified:   .config/tmux/tmux.conf
+        modified:   .gitconfig
+        modified:   .zshrc
+
+Changes not staged for commit:
+        modified:   README.md
+```
+
+
+recommendations
+---------------
+
+```
+git config --global alias.af "add-files"
+```
+
+
+license
+-------
+
+GPL-2.0-only (same as git) (c) 2024 Kipras Melnikovas
+
