@@ -12,10 +12,12 @@ CONFIG_ABBREV_COMMANDS="addfiles.abbreviateCommands"
 FILENAME="ADD_FILES"
 
 CMD_ADD="add"
+CMD_WIP="wip"
 CMD_STAGED="staged"
 CMD_HALFSTAGED="halfstaged"
 
 SHORT_CMD_ADD="a"
+SHORT_CMD_WIP="w"
 SHORT_CMD_STAGED="s"
 SHORT_CMD_HALFSTAGED="h"
 
@@ -25,6 +27,8 @@ INFO_MSG="\
 #
 # delete \"$CMD_HALFSTAGED\" (noop) lines to un-stage partially-staged files.
 # change \"$CMD_HALFSTAGED\" (noop) to \"$CMD_ADD\" to stage partially-staged files.
+#
+# \"wip\" is noop, cached in .git/add-files/wip
 #
 # all commands have a single-char shortcut.
 # empty lines and lines starting with '#' will be ignored.
@@ -75,7 +79,13 @@ git_add_files() {
 
 	repodir="$(git rev-parse --show-toplevel)"
 	gitdir="$(git rev-parse --git-dir)"
+
+	FILE_STORE="$gitdir/add-files"
 	file="$gitdir/$FILENAME"
+	FILE_WIP="$FILE_STORE/wip"
+
+	mkdir -p "$FILE_STORE"
+	touch "$FILE_WIP"
 
 	COMMENT_REGEX="\s*#.*$"
 
@@ -95,17 +105,24 @@ git_add_files() {
 		printf "%s" "$1" | sed "s@^@$2@g"
 	}
 
+	ADD_WITHOUT_WIP="$(printf "%b" "$ADD" | { grep -vFf "$FILE_WIP" ||: ; })"
+	WIP="$(printf "%b" "$ADD" | { grep -Ff "$FILE_WIP" ||: ; })"
+
 	if test "$(git config "$CONFIG_ABBREV_COMMANDS")" = "true"; then
-		ADD_READY="$(   inject_prefix_into "$ADD"    "$SHORT_CMD_ADD ")"
+		ADD_READY="$(inject_prefix_into "$ADD_WITHOUT_WIP" "$SHORT_CMD_ADD ")"
+		WIP_READY="$(inject_prefix_into "$WIP" "$SHORT_CMD_WIP ")"
 		STAGED_READY="$(inject_prefix_into "$STAGED" "$SHORT_CMD_STAGED ")"
 	else
-		ADD_READY="$(   inject_prefix_into "$ADD"    "$CMD_ADD ")"
+		ADD_READY="$(inject_prefix_into "$ADD_WITHOUT_WIP" "$CMD_ADD ")"
+		WIP_READY="$(inject_prefix_into "$WIP" "$CMD_WIP ")"
 		STAGED_READY="$(inject_prefix_into "$STAGED" "$CMD_STAGED ")"
 	fi
 
-	sep=""
-	test -n "$ADD_READY" && test -n "$STAGED_READY" && sep="\n\n"
-	printf "%s%b%s\n%s" "$ADD_READY" "$sep" "$STAGED_READY" > "$file"
+	sep1=""
+	sep2=""
+	test -n "$ADD_READY" && test -n "$WIP_READY" && sep1="\n\n"
+	test -n "$WIP_READY" && test -n "$STAGED_READY" && sep2="\n\n"
+	printf "%s%b%s%b%s\n%s" "$ADD_READY" "$sep1" "$WIP_READY" "$sep2" "$STAGED_READY" > "$file"
 
 	test "$(git config "$CONFIG_DISABLE_INFO")" != "true" && {
 		printf "\n%s" "$INFO_MSG" >> "$file"
@@ -136,15 +153,22 @@ git_add_files() {
 	}
 	validate_file() {
 		# TODO handle deletions
-		test -f "$1" || msg "file does not exit '$1'"
+
+		# TODO handle submodule "files" which are directories,
+		# and cannot be added if include uncommitted changes.
+
+		test -f "$1" || test -d "$1" || msg "file does not exit '$1'\n"
 	}
 
 	marked_added="/tmp/marked_added"
 	marked_staged="/tmp/marked_staged"
+	marked_wip="/tmp/marked_wip"
 	test -f "$marked_added"  && mv -f "$marked_added"  "$marked_added.prev"
 	test -f "$marked_staged" && mv -f "$marked_staged" "$marked_staged.prev"
+	test -f "$marked_wip" && mv -f "$marked_wip" "$marked_wip.prev"
 	touch "$marked_added"
 	touch "$marked_staged"
+	touch "$marked_wip"
 	had_adds=0
 
 	# process & validate lines, group filepaths.
@@ -158,8 +182,17 @@ git_add_files() {
 
 				validate_file "$filepath"
 
-				printf "%s\n" "$filepath" >> "$marked_added"
+				printf "%s\n" "$file" >> "$marked_added"
 				had_adds=1
+				;;
+			"$CMD_WIP"|"$SHORT_CMD_WIP"*)
+				rest="$(line_tail "$line")"
+				file="$(line_head "$rest")"
+				filepath="$(realpath "$repodir/$file")"
+
+				validate_file "$filepath"
+
+				printf "%s\n" "$file" >> "$marked_wip"
 				;;
 			"$CMD_STAGED"|"$SHORT_CMD_STAGED"*)
 				rest="$(line_tail "$line")"
@@ -168,7 +201,7 @@ git_add_files() {
 
 				validate_file "$filepath"
 
-				printf "%s\n" "$filepath" >> "$marked_staged"
+				printf "%s\n" "$file" >> "$marked_staged"
 				;;
 			"$CMD_HALFSTAGED"|"$SHORT_CMD_HALFSTAGED"*)
 				# noop
@@ -181,13 +214,16 @@ git_add_files() {
 
 	# add all lines that were kept as "add"
 
-	test "$had_adds" -eq 0 || git add --pathspec-from-file="$marked_added"
+	# TODO refactor abs
+	var_marked_added="$(inject_prefix_into "$(cat "$marked_added")" "$repodir/")"
+	marked_added_abs="/tmp/marked_added_abs"
+	printf "%s" "$var_marked_added" > "$marked_added_abs"
+	test "$had_adds" -eq 0 || git add --pathspec-from-file="$marked_added_abs"
 
 	# unstage if any "staged" lines were removed
 
-	staged_fullpaths="$(inject_prefix_into "$STAGED" "$repodir/")"
 	were_staged="/tmp/were_staged"
-	printf "%s\n" "$staged_fullpaths" > "$were_staged"
+	printf "%s\n" "$STAGED" > "$were_staged"
 	
 	delta_staged="/tmp/delta_staged"
 	diff --minimal "$were_staged" "$marked_staged" > "$delta_staged" || {
@@ -198,7 +234,28 @@ git_add_files() {
 		unmarked_staged="/tmp/unmarked_staged"
 		grep "^<" "$delta_staged" | sed 's@^< @@g' > "$unmarked_staged"
 
-		git reset --pathspec-from-file="$unmarked_staged" HEAD
+		# convert to absolute filepaths,
+		# for --pathspec-from-file to work
+		# TODO refactor abs
+		var_unmarked_staged="$(cat "$unmarked_staged")"
+		var_unmarked_staged_abs="$(inject_prefix_into "$var_unmarked_staged" "$repodir/")"
+		unmarked_staged_abs="/tmp/unmarked_staged_abs"
+		printf "%s" "$var_unmarked_staged_abs" > "$unmarked_staged_abs"
+
+		git reset --pathspec-from-file="$unmarked_staged_abs" HEAD
+	}
+
+	# mark all lines as "wip" that have removed "add"
+
+	were_to_be_added="/tmp/were_to_be_added"
+	printf "%s\n" "$ADD" > "$were_to_be_added"
+
+	delta_add="/tmp/delta_add"
+	diff --minimal "$were_to_be_added" "$marked_added" > "$delta_add" || {
+		unmarked_add="/tmp/unmarked_add"
+		grep "^<" "$delta_add" | sed 's@^< @@g' > "$unmarked_add"
+
+		cat "$unmarked_add" "$marked_wip" | sort | uniq > "$FILE_WIP"
 	}
 }
 

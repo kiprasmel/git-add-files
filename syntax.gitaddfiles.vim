@@ -14,6 +14,7 @@ syn case match
 let s:c = escape((matchstr(getline('$'), '^[#;@!$%^&|:]\S\@!') . '#')[0], '^$.*[]~\"/')
 
 syn match   gitaddfilesAdd        "\v^a%(dd)=>"        nextgroup=gitaddfilesFile skipwhite
+syn match   gitaddfilesWip        "\v^w%(ip)=>"        nextgroup=gitaddfilesFile skipwhite
 syn match   gitaddfilesEdit       "\v^e%(dit)=>"       nextgroup=gitaddfilesFile skipwhite
 syn match   gitaddfilesStaged     "\v^s%(taged)=>"     nextgroup=gitaddfilesFile skipwhite
 syn match   gitaddfilesHalfstaged "\v^h%(alfstaged)=>" nextgroup=gitaddfilesFile skipwhite
@@ -26,7 +27,8 @@ exe 'syn match gitaddfilesComment "^\s*' . s:c . '.*" '
 unlet s:c
 
 hi def link gitaddfilesAdd            String
-hi def link gitaddfilesEdit           Type
+hi def link gitaddfilesWip            Type
+hi def link gitaddfilesEdit           PreProc
 hi def link gitaddfilesStaged         Conditional
 hi def link gitaddfilesHalfstaged     Comment
 hi def link gitaddfilesNoop           Comment
