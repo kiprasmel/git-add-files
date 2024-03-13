@@ -85,7 +85,6 @@ git_add_files() {
 	FILE_WIP="$FILE_STORE/wip"
 
 	mkdir -p "$FILE_STORE"
-	touch "$FILE_WIP"
 
 	COMMENT_REGEX="\s*#.*$"
 
@@ -105,8 +104,13 @@ git_add_files() {
 		printf "%s" "$1" | sed "s@^@$2@g"
 	}
 
-	ADD_WITHOUT_WIP="$(printf "%b" "$ADD" | { grep -vFf "$FILE_WIP" ||: ; })"
-	WIP="$(printf "%b" "$ADD" | { grep -Ff "$FILE_WIP" ||: ; })"
+	if test -f "$FILE_WIP"; then
+		ADD_WITHOUT_WIP="$(printf "%b" "$ADD" | { grep -vFf "$FILE_WIP" ||: ; })"
+		WIP="$(printf "%b" "$ADD" | { grep -Ff "$FILE_WIP" ||: ; })"
+	else
+		ADD_WITHOUT_WIP="$ADD"
+		WIP=""
+	fi
 
 	if test "$(git config "$CONFIG_ABBREV_COMMANDS")" = "true"; then
 		ADD_READY="$(inject_prefix_into "$ADD_WITHOUT_WIP" "$SHORT_CMD_ADD ")"
@@ -223,9 +227,11 @@ git_add_files() {
 	# unstage if any "staged" lines were removed
 
 	were_staged="/tmp/were_staged"
-	printf "%s\n" "$STAGED" > "$were_staged"
-	
+	printf "%s" "$STAGED" > "$were_staged"
+	trim_trailing_newline "$were_staged"
+
 	delta_staged="/tmp/delta_staged"
+
 	diff --minimal "$were_staged" "$marked_staged" > "$delta_staged" || {
 		grep "^>" "$delta_staged" && {
 			die "fatal: you marked non-staged files as staged?\n"
@@ -248,7 +254,8 @@ git_add_files() {
 	# mark all lines as "wip" that have removed "add"
 
 	were_to_be_added="/tmp/were_to_be_added"
-	printf "%s\n" "$ADD" > "$were_to_be_added"
+	printf "%s" "$ADD" > "$were_to_be_added"
+	trim_trailing_newline "$were_to_be_added"
 
 	delta_add="/tmp/delta_add"
 	diff --minimal "$were_to_be_added" "$marked_added" > "$delta_add" || {
@@ -257,6 +264,13 @@ git_add_files() {
 
 		cat "$unmarked_add" "$marked_wip" | sort | uniq > "$FILE_WIP"
 	}
+}
+
+trim_trailing_newline() {
+	file="$1"
+	shift
+	cat "$file" | perl -pe 'chomp if eof' > "$file.tmp"
+	mv -f "$file.tmp" "$file"
 }
 
 git_add_files "$@"
