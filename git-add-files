@@ -15,15 +15,20 @@ CMD_ADD="add"
 CMD_WIP="wip"
 CMD_STAGED="staged"
 CMD_HALFSTAGED="halfstaged"
+CMD_EDIT="edit"
 
 SHORT_CMD_ADD="a"
 SHORT_CMD_WIP="w"
 SHORT_CMD_STAGED="s"
 SHORT_CMD_HALFSTAGED="h"
+SHORT_CMD_EDIT="e"
 
 INFO_MSG="\
 # delete \"$CMD_ADD\"    lines to prevent  files from getting staged.
 # delete \"$CMD_STAGED\" lines to un-stage files.
+#
+# change \"$CMD_ADD\"    to \"$CMD_EDIT\" to selectively    stage parts of file
+# change \"$CMD_STAGED\" to \"$CMD_EDIT\" to selectively un-stage parts of file
 #
 # delete \"$CMD_HALFSTAGED\" (noop) lines to un-stage partially-staged files.
 # change \"$CMD_HALFSTAGED\" (noop) to \"$CMD_ADD\" to stage partially-staged files.
@@ -167,12 +172,15 @@ git_add_files() {
 	marked_added="/tmp/marked_added"
 	marked_staged="/tmp/marked_staged"
 	marked_wip="/tmp/marked_wip"
+	marked_edit="/tmp/marked_edit"
 	test -f "$marked_added"  && mv -f "$marked_added"  "$marked_added.prev"
 	test -f "$marked_staged" && mv -f "$marked_staged" "$marked_staged.prev"
 	test -f "$marked_wip" && mv -f "$marked_wip" "$marked_wip.prev"
+	test -f "$marked_edit" && mv -f "$marked_edit" "$marked_edit.prev"
 	touch "$marked_added"
 	touch "$marked_staged"
 	touch "$marked_wip"
+	touch "$marked_edit"
 	had_adds=0
 
 	# process & validate lines, group filepaths.
@@ -209,6 +217,15 @@ git_add_files() {
 				;;
 			"$CMD_HALFSTAGED"|"$SHORT_CMD_HALFSTAGED"*)
 				# noop
+				;;
+			"$CMD_EDIT"|"$SHORT_CMD_EDIT"*)
+				rest="$(line_tail "$line")"
+				file="$(line_head "$rest")"
+				filepath="$(realpath "$repodir/$file")"
+
+				validate_file "$filepath"
+
+				printf "%s\n" "$file" >> "$marked_edit"
 				;;
 			*)
 				die "fatal: unknown command in line '$line'\n"
@@ -264,6 +281,10 @@ git_add_files() {
 
 		cat "$unmarked_add" "$marked_wip" | sort | uniq > "$FILE_WIP"
 	}
+
+	# launch interactive 'add -p' for lines that were marked as "edit"
+
+	# TODO
 }
 
 trim_trailing_newline() {
