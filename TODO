@@ -1,0 +1,2 @@
+- clean WIP cache for {file} once it's been added by user
+- add untracked files, probably as "untracked", so that can easily change to "add"
