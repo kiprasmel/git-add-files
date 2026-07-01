@@ -1,17 +1,33 @@
 #!/bin/sh
 
-set -euo pipefail
-set -x
+set -eu
+
+# resolve the repo dir from the script location, so this works from anywhere
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 BREW_PREF="$(brew --prefix)"
-ln -s -f "$PWD/git-add-files" "$BREW_PREF/bin/"
+ln -sf "$REPO_DIR/git-add-files" "$BREW_PREF/bin/git-add-files"
 
 NAME="gitaddfiles"
 FILE="$NAME.vim"
 
-which nvim >/dev/null && {
-	VERSION="$(nvim --version | head -n1 | cut -d' ' -f2 | cut -d'v' -f2)"
-	ln -s -f "$PWD/syntax.$FILE"   "$BREW_PREF/Cellar/neovim/${VERSION}_1/share/nvim/runtime/syntax/$FILE"
-	ln -s -f "$PWD/ftplugin.$FILE" "$BREW_PREF/Cellar/neovim/${VERSION}_1/share/nvim/runtime/ftplugin/$FILE"
+# Install the syntax + ftplugin files into per-user runtime dirs that are on the
+# editor's 'runtimepath' by default. Unlike Homebrew's Cellar dir, these survive
+# editor upgrades and don't depend on parsing/guessing a version string.
+install_rtp() {
+	base="$1"
+	for kind in syntax ftplugin ftdetect; do
+		mkdir -p "$base/$kind"
+		ln -sf "$REPO_DIR/$kind.$FILE" "$base/$kind/$FILE"
+	done
 }
 
+# Neovim
+if command -v nvim >/dev/null 2>&1; then
+	install_rtp "${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
+fi
+
+# Vim
+if command -v vim >/dev/null 2>&1; then
+	install_rtp "$HOME/.vim"
+fi
